@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Land Art – Interaktivní plakát</title>
+
+  <style>
+    :root{
+      /* БАЗОВЫЙ РАЗМЕР ПЛАКАТА (3:4). Ничего в файлах менять не надо. */
+      --baseW: 900;
+      --baseH: 1200;
+
+      /* масштаб сцены под экран */
+      --scale: 1;
+    }
+
+    html,body{
+      margin:0;
+      height:100%;
+      overflow:hidden;
+      background:#0f1115;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* экран на весь viewport */
+    #app{
+      position:fixed;
+      inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow:hidden;
+      padding:0;
+    }
+
+    /* “рамка” для сцены — центрирование */
+    #frame{
+      position:relative;
+      width:100vw;
+      height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow:hidden;
+      touch-action:none;
+    }
+
+    /* Сцена: базовые px, потом JS масштабирует transform: scale() */
+    #stage{
+      position:relative;
+      width: calc(var(--baseW) * 1px);
+      height: calc(var(--baseH) * 1px);
+      transform: scale(var(--scale));
+      transform-origin: center center;
+      border-radius: 18px;
+      overflow:hidden;
+      box-shadow:0 18px 60px rgba(0,0,0,.55);
+      touch-action:none;
+      will-change: transform;
+      background:#222;
+    }
+
+    /* фон — как IMG (быстрее/предсказуемее чем background-size на мобиле) */
+    #bg{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+      object-fit: cover; /* заполняет сцену полностью */
+      user-select:none;
+      -webkit-user-drag:none;
+      pointer-events:none;
+    }
+
+    /* --------- FLOATING STICKERS --------- */
+    @keyframes floaty{
+      0%   { transform: translate3d(-50%,-50%,0) translateY(0px) rotate(var(--rot,0deg)); }
+      50%  { transform: translate3d(-50%,-50%,0) translateY(var(--amp,-6px)) rotate(var(--rot,0deg)); }
+      100% { transform: translate3d(-50%,-50%,0) translateY(0px) rotate(var(--rot,0deg)); }
+    }
+    .sticker{
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform: translate3d(-50%,-50%,0);
+      width:260px;
+      pointer-events:none;
+      user-select:none;
+      -webkit-user-drag:none;
+      filter: drop-shadow(0 18px 40px rgba(0,0,0,.35));
+      will-change: transform;
+      animation: floaty 5s ease-in-out infinite;
+      z-index: 30;
+    }
+    .sticker img{ display:block; width:100%; height:auto; }
+
+    .sticker[data-float="1"]{ animation-duration:4.5s; animation-delay:-0.6s; --amp:-7px; }
+    .sticker[data-float="2"]{ animation-duration:5.5s; animation-delay:-1.8s; --amp:-9px; }
+    .sticker[data-float="3"]{ animation-duration:6.0s; animation-delay:-2.7s; --amp:-6px; }
+    .sticker[data-float="4"]{ animation-duration:4.8s; animation-delay:-3.4s; --amp:-8px; }
+
+    /* --------- OBJECTS --------- */
+    .obj{
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform: translate3d(-50%,-50%,0) rotate(0deg) scale(1);
+      transform-origin:center;
+      user-select:none;
+      -webkit-user-drag:none;
+      touch-action:none;
+      cursor:grab;
+      filter: drop-shadow(0 12px 18px rgba(0,0,0,.35));
+      will-change: transform, left, top;
+    }
+    .obj:active{ cursor:grabbing; }
+    .obj img{ display:block; width:100%; height:auto; pointer-events:none; }
+
+    .selected{
+      outline:2px dashed rgba(255,255,255,.75);
+      outline-offset:10px;
+      border-radius:18px;
+    }
+
+    /* rotate handle like Figma */
+    .rotate-handle{
+      position:absolute;
+      top:-36px;
+      left:50%;
+      transform:translateX(-50%);
+      width:22px;
+      height:22px;
+      border-radius:50%;
+      background:#ffd21f;
+      border:2px solid #111;
+      box-shadow:0 4px 12px rgba(0,0,0,.35);
+      cursor:grab;
+      display:none;
+      pointer-events:auto;
+    }
+    .obj.selected .rotate-handle{ display:block; }
+
+    /* чуть легче на мобиле */
+    @media (max-width: 700px){
+      #stage{ border-radius: 14px; }
+    }
+  </style>
+</head>
+
+<body>
+<div id="app">
+  <div id="frame">
+    <div id="stage">
+      <!-- IMPORTANT: файл должен лежать рядом и называться именно poster.png -->
+      <img id="bg" src="poster.png" alt="">
+      <!-- элементы будут добавлены JS -->
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const root = document.documentElement;
+  const stage = document.getElementById("stage");
+
+  // ====== 1) FIT TO SCREEN (desktop + mobile) ======
+  function fit() {
+    const baseW = parseFloat(getComputedStyle(root).getPropertyValue("--baseW"));
+    const baseH = parseFloat(getComputedStyle(root).getPropertyValue("--baseH"));
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // небольшой “safe padding” чтобы не упиралось в края/ночи iPhone
+    const pad = 0;
+    const scale = Math.min((vw - pad) / baseW, (vh - pad) / baseH);
+
+    root.style.setProperty("--scale", String(scale));
+  }
+  window.addEventListener("resize", fit, {passive:true});
+  window.addEventListener("orientationchange", fit, {passive:true});
+  fit();
+
+  // ====== 2) Helpers ======
+  let selected = null;
+
+  function select(node){
+    if (selected) selected.classList.remove("selected");
+    selected = node;
+    if (selected) selected.classList.add("selected");
+  }
+
+  function applyTransform(node){
+    const rot = parseFloat(node.dataset.rot || "0");
+    const scale = parseFloat(node.dataset.scale || "1");
+    node.style.transform = `translate3d(-50%,-50%,0) rotate(${rot}deg) scale(${scale})`;
+  }
+
+  function setZ(node, z){
+    node.dataset.z = String(z);
+    node.style.zIndex = String(z);
+  }
+
+  function bringForward(node){ setZ(node, parseInt(node.dataset.z||"20",10) + 1); }
+  function sendBackward(node){ setZ(node, parseInt(node.dataset.z||"20",10) - 1); }
+
+  function getAllZ(){
+    return [...stage.querySelectorAll(".obj")].map(n => parseInt(n.dataset.z || "20", 10));
+  }
+  function bringToFront(node){
+    const maxZ = Math.max(20, ...getAllZ());
+    setZ(node, maxZ + 1);
+  }
+  function sendToBack(node){
+    const minZ = Math.min(20, ...getAllZ());
+    setZ(node, minZ - 1);
+  }
+
+  // координаты в “базовых px” сцены
+  function pctToPxX(pct){ return (pct/100) * parseFloat(getComputedStyle(root).getPropertyValue("--baseW")); }
+  function pctToPxY(pct){ return (pct/100) * parseFloat(getComputedStyle(root).getPropertyValue("--baseH")); }
+  function pxToPctX(px){ return (px / parseFloat(getComputedStyle(root).getPropertyValue("--baseW"))) * 100; }
+  function pxToPctY(py){ return (py / parseFloat(getComputedStyle(root).getPropertyValue("--baseH"))) * 100; }
+
+  // stage rect в экране -> перевод pointer в базовые px
+  function pointerToStageBase(ev){
+    const rect = stage.getBoundingClientRect();
+    const baseW = parseFloat(getComputedStyle(root).getPropertyValue("--baseW"));
+    const baseH = parseFloat(getComputedStyle(root).getPropertyValue("--baseH"));
+
+    const x = (ev.clientX - rect.left) * (baseW / rect.width);
+    const y = (ev.clientY - rect.top)  * (baseH / rect.height);
+    return {x, y};
+  }
+
+  // ====== 3) Stickers ======
+  function addStickerPNG({ src, xPct, yPct, wPx=260, rot=0, floatVariant=1, z=30 }) {
+    const s = document.createElement("div");
+    s.className = "sticker";
+    s.dataset.float = String(floatVariant);
+    s.style.left = `${xPct}%`;
+    s.style.top  = `${yPct}%`;
+    s.style.width = `${wPx}px`;
+    s.style.setProperty("--rot", `${rot}deg`);
+    s.style.zIndex = String(z);
+
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = "";
+    s.appendChild(img);
+
+    stage.appendChild(s);
+  }
+
+  // ====== 4) Objects (drag + rotate handle + smooth rAF) ======
+  function makeObject({ src, xPct, yPct, wPx, rot=0, scale=1, z=20 }) {
+    const wrap = document.createElement("div");
+    wrap.className = "obj";
+    wrap.style.left = `${xPct}%`;
+    wrap.style.top  = `${yPct}%`;
+    wrap.style.width = `${wPx}px`;
+    wrap.dataset.rot = String(rot);
+    wrap.dataset.scale = String(scale);
+    setZ(wrap, z);
+
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = "";
+    wrap.appendChild(img);
+
+    const handle = document.createElement("div");
+    handle.className = "rotate-handle";
+    wrap.appendChild(handle);
+
+    applyTransform(wrap);
+
+    // select on tap/click
+    wrap.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      select(wrap);
+    });
+
+    // ---- DRAG with rAF ----
+    let dragging = false;
+    let dragPid = null;
+    let dx = 0, dy = 0;
+    let pending = null;
+    let raf = 0;
+
+    function tick(){
+      raf = 0;
+      if (!pending) return;
+      const {x, y} = pending;
+      wrap.style.left = `${pxToPctX(x)}%`;
+      wrap.style.top  = `${pxToPctY(y)}%`;
+      pending = null;
+    }
+
+    wrap.addEventListener("pointerdown", (e) => {
+      if (e.target === handle) return; // handle rotates
+      e.preventDefault();
+      e.stopPropagation();
+
+      select(wrap);
+      bringForward(wrap);
+
+      dragging = true;
+      dragPid = e.pointerId;
+      wrap.setPointerCapture(dragPid);
+
+      const p = pointerToStageBase(e);
+
+      const curX = pctToPxX(parseFloat(wrap.style.left));
+      const curY = pctToPxY(parseFloat(wrap.style.top));
+
+      dx = p.x - curX;
+      dy = p.y - curY;
+    });
+
+    wrap.addEventListener("pointermove", (e) => {
+      if (!dragging || e.pointerId !== dragPid) return;
+      const p = pointerToStageBase(e);
+      pending = { x: p.x - dx, y: p.y - dy };
+      if (!raf) raf = requestAnimationFrame(tick);
+    });
+
+    function endDrag(e){
+      if (!dragging || e.pointerId !== dragPid) return;
+      dragging = false;
+      wrap.releasePointerCapture(dragPid);
+      dragPid = null;
+      pending = null;
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+    }
+    wrap.addEventListener("pointerup", endDrag);
+    wrap.addEventListener("pointercancel", endDrag);
+
+    // ---- ROTATE by handle ----
+    handle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      select(wrap);
+      bringForward(wrap);
+
+      const rect = wrap.getBoundingClientRect();
+      const cx = rect.left + rect.width/2;
+      const cy = rect.top  + rect.height/2;
+
+      const startAngle = Math.atan2(e.clientY - cy, e.clientX - cx);
+      const startRot = parseFloat(wrap.dataset.rot || "0");
+
+      handle.setPointerCapture(e.pointerId);
+
+      const move = (ev) => {
+        const angle = Math.atan2(ev.clientY - cy, ev.clientX - cx);
+        const delta = angle - startAngle;
+        const deg = startRot + delta * (180/Math.PI);
+        wrap.dataset.rot = String(deg);
+        applyTransform(wrap);
+      };
+
+      const up = () => {
+        handle.releasePointerCapture(e.pointerId);
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+      };
+
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+
+    // ---- MOBILE: double tap = bring to front, long press = delete ----
+    let lastTap = 0;
+    let pressTimer = 0;
+
+    wrap.addEventListener("pointerup", (e) => {
+      // double tap
+      const now = Date.now();
+      if (now - lastTap < 260) {
+        bringToFront(wrap);
+      }
+      lastTap = now;
+      clearTimeout(pressTimer);
+    });
+
+    wrap.addEventListener("pointerdown", (e) => {
+      if (e.target === handle) return;
+      clearTimeout(pressTimer);
+      pressTimer = setTimeout(() => {
+        // long-press delete (no UI)
+        if (selected === wrap) {
+          wrap.remove();
+          selected = null;
+        }
+      }, 800);
+    });
+    wrap.addEventListener("pointermove", () => clearTimeout(pressTimer));
+    wrap.addEventListener("pointercancel", () => clearTimeout(pressTimer));
+
+    stage.appendChild(wrap);
+    return wrap;
+  }
+
+  // deselect on empty click
+  stage.addEventListener("pointerdown", (e) => {
+    // если тыкнули по самому stage/фону (не по объектам)
+    if (e.target === stage || e.target.id === "bg") select(null);
+  });
+
+  // WHEEL SCALE (desktop)
+  stage.addEventListener("wheel", (e) => {
+    if (!selected) return;
+    e.preventDefault();
+    const s = parseFloat(selected.dataset.scale || "1");
+    const next = Math.min(3.0, Math.max(0.2, s + (e.deltaY < 0 ? 0.06 : -0.06)));
+    selected.dataset.scale = String(next);
+    applyTransform(selected);
+  }, {passive:false});
+
+  // KEYBOARD (desktop)
+  window.addEventListener("keydown", (e) => {
+    if (!selected) return;
+
+    if (e.key === "Delete" || e.key === "Backspace") {
+      selected.remove();
+      selected = null;
+      return;
+    }
+    // z-order
+    if (e.key === "]") { e.shiftKey ? bringToFront(selected) : bringForward(selected); return; }
+    if (e.key === "[") { e.shiftKey ? sendToBack(selected)   : sendBackward(selected); return; }
+
+    // optional rotate by keyboard (still works)
+    if (e.key.toLowerCase() === "r") {
+      const step = e.shiftKey ? -15 : 15;
+      const rot = parseFloat(selected.dataset.rot || "0") + step;
+      selected.dataset.rot = String(rot);
+      applyTransform(selected);
+      return;
+    }
+  });
+
+  // ====== 5) ADD YOUR FLOATING STICKERS (поставлено компактно) ======
+  // Эти файлы должны лежать рядом:
+  // sticker_title.png, sticker_loot_arrow.png, sticker_date.png, sticker_footer.png
+  addStickerPNG({ src:"sticker_title.png",      xPct:30, yPct:13, wPx:340, rot:-15, floatVariant:1, z:30 });
+  addStickerPNG({ src:"sticker_loot_arrow.png", xPct:74, yPct:42, wPx:210, rot:0,   floatVariant:2, z:30 });
+  addStickerPNG({ src:"sticker_date.png",       xPct:18, yPct:95, wPx:150, rot:0,   floatVariant:3, z:30 });
+  addStickerPNG({ src:"sticker_footer.png",     xPct:80, yPct:93, wPx:200, rot:0,   floatVariant:4, z:30 });
+
+  // ====== 6) SPAWN OBJECTS where you want (под "TVŮJ LOOT") ======
+  // Эти PNG должны лежать рядом и называться как тут (или переименуй файлы под эти имена):
+  // rock_big.png, lamp.png, branch.png
+  const objects = [
+    { src:"rock_big.png", xPct:45, yPct:72, wPx:240, rot:-10, scale:1.0, z:20 },
+    { src:"lamp.png",     xPct:52, yPct:67, wPx:160, rot:0,   scale:1.0, z:21 },
+    { src:"branch.png",   xPct:62, yPct:74, wPx:340, rot:-12, scale:1.0, z:22 }
+  ];
+  objects.forEach(makeObject);
+
+  // ====== 7) PRELOAD (уменьшает “лаг” при первом появлении) ======
+  const preload = [
+    "poster.png",
+    "sticker_title.png","sticker_loot_arrow.png","sticker_date.png","sticker_footer.png",
+    "rock_big.png","lamp.png","branch.png"
+  ];
+  preload.forEach(src => { const i = new Image(); i.src = src; });
+
+})();
+</script>
+</body>
+</html>
